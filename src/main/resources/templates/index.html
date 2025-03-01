@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>채팅 애플리케이션</title>
+
+	<link rel="stylesheet" th:href="@{/css/styles.css}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+</head>
+<body>
+    <div>
+        <input type="text" id="name" placeholder="닉네임 입력"/>
+        <button id="connect">접속</button>
+    </div>
+    <div id="chat" style="display:none;">
+        <div id="userList"></div>
+        <div id="chatRoomList"></div>
+        <button id="createRoom">채팅방 생성</button>
+        <input type="text" id="message" placeholder="메시지 입력"/>
+        <button id="sendMessage">보내기</button>
+		<ul id="messageArea"></ul>
+    </div>
+    <script>
+        let stompClient = null;
+        let username = null;
+		let currentRoomId = null;
+
+        function connect(e) {
+			e.preventDefault();
+
+            username = document.querySelector('#name').value.trim();
+
+            if( username ) {
+                const socket = new SockJS('/ws');
+                stompClient = Stomp.over(socket);
+
+                stompClient.connect({}, onConnected, onError);
+            }
+        }
+
+        function onConnected() {
+            document.getElementById('chat').style.display = 'block';
+            document.getElementById('connect').style.display = 'none';
+
+            stompClient.subscribe('/topic/public', onMessageReceived);
+            stompClient.send("/app/chat.addUser", {}, JSON.stringify({sender: username, type: 'JOIN'}));
+
+			fetchChatRooms();
+        }
+
+        function onError(error) {
+            console.log('Could not connect to WebSocket server. Please refresh this page to try again!');
+        }
+
+        function sendMessage(e) {
+			e.preventDefault();
+
+			if ( !currentRoomId ) {
+				alert('채팅방에 입장해 주세요.');
+				return;
+			}
+
+            const messageContent = document.querySelector('#message').value.trim();
+
+            if( messageContent && stompClient && currentRoomId ) {
+                const chatMessage = {
+                    sender: username,
+                    content: messageContent,
+                    type: 'CHAT',
+					roomId: currentRoomId
+                };
+
+                stompClient.send("/app/chat.sendMessage", {}, JSON.stringify(chatMessage));
+                document.querySelector('#message').value = '';
+            }
+        }
+
+		function createChatRoom(event) {
+		    const chatRoomName = prompt("채팅방 이름을 입력하세요:");
+		    if ( chatRoomName ) {
+		        fetch('/chatrooms', {
+		            method: 'POST',
+		            headers: {
+		                'Content-Type': 'application/x-www-form-urlencoded'
+		            },
+		            body: new URLSearchParams({name: chatRoomName})
+		        })
+		        .then(response => response.json())
+		        .then(data => {
+		            fetchChatRooms();
+					joinChatRoom(data.id);
+		        });
+		    }
+		    event.preventDefault();
+		}
+
+		function fetchChatRooms() {
+		    fetch('/chatrooms')
+		        .then(response => response.json())
+		        .then(data => {
+		            const chatRoomList = document.querySelector('#chatRoomList');
+		            chatRoomList.innerHTML = '';
+		            data.forEach(chatRoom => {
+		                const chatRoomElement = document.createElement('div');
+		                chatRoomElement.textContent = `채팅방 이름: ${chatRoom.name}`;
+
+						chatRoomElement.addEventListener('click', () => {
+                            joinChatRoom(chatRoom.id);
+                        });
+
+		                chatRoomList.appendChild(chatRoomElement);
+		            });
+		        });
+		}
+
+		function joinChatRoom(roomId) {
+		    if ( currentRoomId ) {
+		        stompClient.unsubscribe('/topic/' + currentRoomId);
+		    }
+
+		    currentRoomId = roomId;
+		    stompClient.subscribe('/topic/' + roomId, onMessageReceived);
+		    document.querySelector('#messageArea').innerHTML = '';
+		}
+
+        function onMessageReceived(payload) {
+            const message = JSON.parse(payload.body);
+
+            const messageElement = document.createElement('li');
+
+            if( message.type === 'JOIN' ) {
+                messageElement.classList.add('event-message');
+                message.content = message.sender + ' joined!';
+            } else {
+                messageElement.classList.add('chat-message');
+
+                const usernameText = document.createTextNode(message.sender);
+
+                const usernameElement = document.createElement('strong');
+                usernameElement.classList.add('nickname');
+                usernameElement.appendChild(usernameText);
+
+                messageElement.appendChild(usernameElement);
+
+                const messageText = document.createTextNode(message.content);
+
+                const textElement = document.createElement('span');
+                textElement.appendChild(messageText);
+
+                messageElement.appendChild(textElement);
+            }
+
+			const messageArea = document.querySelector('#messageArea');
+			if ( messageArea ) {
+			    messageArea.appendChild(messageElement);
+			    messageArea.scrollTop = messageArea.scrollHeight;
+			}
+        }
+
+        document.querySelector('#connect').addEventListener('click', connect, true);
+        document.querySelector('#sendMessage').addEventListener('click', sendMessage, true);
+		document.querySelector('#createRoom').addEventListener('click', createChatRoom, true);
+    </script>
+</body>
+</html>
